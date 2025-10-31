@@ -149,7 +149,7 @@ class VideoGalleryGenerator:
         thumbnails_html = '\n'.join(thumbnail_items)
 
         # Up link (show only if not root)
-        up_link = '' if is_root else '<a href="../index.html" class="up-link">↑ Up</a>'
+        up_link = '' if is_root else '<a href=".." class="up-link">↑ Up</a>'
 
         return f'''<!DOCTYPE html>
 <html lang="en">
