@@ -1,21 +1,30 @@
 #!/usr/bin/env python3
 """
-Video Gallery Generator
-Scans directories for mp4 files and generates static HTML galleries
+Media Gallery Generator
+Scans directories for media files and generates static HTML galleries
 """
 
 import html
 import re
 import sys
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 
-class VideoGalleryGenerator:
-    """Generate HTML galleries for video files"""
+@dataclass(frozen=True)
+class MediaItem:
+    path: Path
+    media_type: str
+
+
+class MediaGalleryGenerator:
+    """Generate HTML galleries for media files"""
 
     THUMBS_DIR = "Thumbs"
     VIDEO_EXTENSION = ".mp4"
+    IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+    MEDIA_EXTENSIONS = {VIDEO_EXTENSION} | IMAGE_EXTENSIONS
     THUMB_SIZE = 200
 
     @staticmethod
@@ -31,11 +40,11 @@ class VideoGalleryGenerator:
     def scan_and_generate(self):
         """Scan directories recursively and generate galleries"""
         for current_dir in self._walk_directories(self.root_path):
-            mp4_files = self._find_mp4_files(current_dir)
+            media_items = self._find_media_items(current_dir)
 
-            if mp4_files:
+            if media_items:
                 print(f"Processing: {current_dir}")
-                self._process_directory(current_dir, mp4_files)
+                self._process_directory(current_dir, media_items)
 
     def _walk_directories(self, root: Path):
         """Walk through directories, yielding each one (excluding Thumbs)"""
@@ -45,45 +54,56 @@ class VideoGalleryGenerator:
             if item.is_dir() and item.name != self.THUMBS_DIR:
                 yield from self._walk_directories(item)
 
-    def _find_mp4_files(self, directory: Path) -> list[Path]:
-        """Find all mp4 files in the given directory (non-recursive)"""
-        mp4_files = []
+    def _find_media_items(self, directory: Path) -> list[MediaItem]:
+        """Find all media files in the given directory (non-recursive)"""
+        media_items = []
         for item in directory.iterdir():
-            if item.is_file() and item.suffix.lower() == self.VIDEO_EXTENSION:
-                mp4_files.append(item)
-        return sorted(mp4_files, key=lambda x: self._natural_sort_key(x.name))
+            suffix = item.suffix.lower()
+            if not item.is_file() or suffix not in self.MEDIA_EXTENSIONS:
+                continue
 
-    def _process_directory(self, directory: Path, mp4_files: list[Path]):
+            media_type = "video" if suffix == self.VIDEO_EXTENSION else "image"
+            media_items.append(MediaItem(item, media_type))
+
+        return sorted(media_items, key=lambda x: self._natural_sort_key(x.path.name))
+
+    def _process_directory(self, directory: Path, media_items: list[MediaItem]):
         """Process a directory: generate thumbnails and HTML"""
         # Create Thumbs directory if needed
         thumbs_dir = directory / self.THUMBS_DIR
         thumbs_dir.mkdir(exist_ok=True)
 
         # Generate thumbnails
-        for mp4_file in mp4_files:
-            self._generate_thumbnail(mp4_file, thumbs_dir)
+        for media_item in media_items:
+            self._generate_thumbnail(media_item, thumbs_dir)
 
         # Generate HTML
-        self._generate_html(directory, mp4_files)
+        self._generate_html(directory, media_items)
 
-    def _generate_thumbnail(self, mp4_file: Path, thumbs_dir: Path):
-        """Generate thumbnail from first frame of video"""
-        thumb_name = mp4_file.stem + ".jpg"
+    def _generate_thumbnail(self, media_item: MediaItem, thumbs_dir: Path):
+        """Generate thumbnail for a media item"""
+        thumb_name = self._thumbnail_name(media_item.path)
         thumb_path = thumbs_dir / thumb_name
 
         # Check if thumbnail needs update
         if thumb_path.exists():
-            if thumb_path.stat().st_mtime >= mp4_file.stat().st_mtime:
+            if thumb_path.stat().st_mtime >= media_item.path.stat().st_mtime:
                 return  # Thumbnail is up to date
 
         print(f"  Creating thumbnail: {thumb_name}")
 
-        # Extract first frame with ffmpeg
-        temp_thumb = thumbs_dir / f"temp_{thumb_name}"
+        if media_item.media_type == "video":
+            self._generate_video_thumbnail(media_item.path, thumb_path, thumbs_dir)
+        else:
+            self._generate_image_thumbnail(media_item.path, thumb_path)
+
+    def _generate_video_thumbnail(self, video_path: Path, thumb_path: Path, thumbs_dir: Path):
+        """Generate thumbnail from first frame of video"""
+        temp_thumb = thumbs_dir / f"temp_{thumb_path.name}"
         try:
             # Extract first frame
             subprocess.run([
-                'ffmpeg', '-y', '-i', str(mp4_file),
+                'ffmpeg', '-y', '-i', str(video_path),
                 '-vframes', '1',
                 '-f', 'image2',
                 str(temp_thumb)
@@ -105,16 +125,31 @@ class VideoGalleryGenerator:
             if temp_thumb.exists():
                 temp_thumb.unlink()
 
-    def _generate_html(self, directory: Path, mp4_files: list[Path]):
+    def _generate_image_thumbnail(self, image_path: Path, thumb_path: Path):
+        """Generate thumbnail from an image file"""
+        try:
+            subprocess.run([
+                'convert', str(image_path),
+                '-resize', f'{self.THUMB_SIZE}x{self.THUMB_SIZE}>',
+                str(thumb_path)
+            ], check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            print(f"  Error generating thumbnail: {e}")
+
+    @staticmethod
+    def _thumbnail_name(media_path: Path) -> str:
+        return media_path.name + ".jpg"
+
+    def _generate_html(self, directory: Path, media_items: list[MediaItem]):
         """Generate index.html for the directory"""
         html_path = directory / "index.html"
 
         # Check if HTML needs update
         if html_path.exists():
             html_mtime = html_path.stat().st_mtime
-            # Check if any mp4 file is newer
+            # Check if any media file is newer
             needs_update = any(
-                mp4.stat().st_mtime > html_mtime for mp4 in mp4_files
+                item.path.stat().st_mtime > html_mtime for item in media_items
             )
             if not needs_update:
                 return  # HTML is up to date
@@ -124,15 +159,15 @@ class VideoGalleryGenerator:
         # Determine relative path to parent
         is_root = (directory == self.root_path)
 
-        html_content = self._create_html_content(directory, mp4_files, is_root)
+        html_content = self._create_html_content(directory, media_items, is_root)
 
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
-    def _create_html_content(self, directory: Path, mp4_files: list[Path], is_root: bool) -> str:
+    def _create_html_content(self, directory: Path, media_items: list[MediaItem], is_root: bool) -> str:
         """Create HTML content for the gallery"""
 
-        thumbnails_html = self._create_thumbnail_html(mp4_files)
+        thumbnails_html = self._create_thumbnail_html(media_items)
         up_link = self._create_up_link(is_root)
 
         return f'''<!DOCTYPE html>
@@ -140,7 +175,7 @@ class VideoGalleryGenerator:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Gallery - {html.escape(directory.name)}</title>
+    <title>Media Gallery - {html.escape(directory.name)}</title>
     <style>
         * {{
             margin: 0;
@@ -235,12 +270,17 @@ class VideoGalleryGenerator:
             flex: none;
         }}
 
-        .video-frame video {{
+        .viewer-media {{
             width: 100%;
             height: 100%;
             object-fit: contain;
-            display: block;
+            display: none;
             user-select: none;
+            -webkit-user-drag: none;
+        }}
+
+        .viewer-media.active {{
+            display: block;
         }}
 
         .video-controls {{
@@ -260,6 +300,14 @@ class VideoGalleryGenerator:
 
         .video-controls.active {{
             display: grid;
+        }}
+
+        .video-controls.image-mode .video-only {{
+            display: none;
+        }}
+
+        .video-controls.image-mode .controls-header {{
+            justify-content: flex-end;
         }}
 
         .controls-header {{
@@ -310,19 +358,20 @@ class VideoGalleryGenerator:
     <div class="video-overlay" id="videoOverlay">
         <div class="video-container" id="videoContainer">
             <div class="video-frame" id="videoFrame">
-                <video id="videoPlayer" loop muted autoplay></video>
+                <video class="viewer-media" id="videoPlayer" loop muted autoplay></video>
+                <img class="viewer-media" id="imageViewer" alt="" draggable="false">
             </div>
             <div class="video-controls" id="videoControls">
                 <div class="controls-header">
-                    <button class="control-button" id="playToggle" type="button">Pause</button>
+                    <button class="control-button video-only" id="playToggle" type="button">Pause</button>
                     <button class="control-button" id="closeVideoButton" type="button">Close</button>
                 </div>
-                <div class="control-row">
+                <div class="control-row video-only">
                     <span>A</span>
                     <input id="loopStart" type="range" min="0" max="0" step="0.01" value="0">
                     <span id="loopStartTime">00:00.00</span>
                 </div>
-                <div class="control-row">
+                <div class="control-row video-only">
                     <span>B</span>
                     <input id="loopEnd" type="range" min="0" max="0" step="0.01" value="0">
                     <span id="loopEndTime">00:00.00</span>
@@ -341,6 +390,7 @@ class VideoGalleryGenerator:
         const videoContainer = document.getElementById('videoContainer');
         const videoFrame = document.getElementById('videoFrame');
         const videoPlayer = document.getElementById('videoPlayer');
+        const imageViewer = document.getElementById('imageViewer');
         const thumbnails = document.querySelectorAll('.thumbnail');
         const videoControls = document.getElementById('videoControls');
         const playToggle = document.getElementById('playToggle');
@@ -360,6 +410,7 @@ class VideoGalleryGenerator:
         let panY = 0;
         let baseFrameWidth = 0;
         let baseFrameHeight = 0;
+        let activeMediaType = 'video';
         let pointerDown = false;
         let pointerId = null;
         let pointerStartX = 0;
@@ -371,21 +422,31 @@ class VideoGalleryGenerator:
 
         thumbnails.forEach(thumb => {{
             thumb.addEventListener('click', () => {{
-                openVideo(thumb.dataset.video);
+                openMedia(thumb.dataset.type, thumb.dataset.src);
             }});
         }});
 
-        function openVideo(videoFile) {{
+        function openMedia(mediaType, mediaSrc) {{
             resetLoopState();
             resetZoomState();
             resetPointerState();
-            videoPlayer.src = videoFile;
+            activeMediaType = mediaType;
+            videoControls.classList.toggle('image-mode', mediaType === 'image');
+            videoPlayer.classList.toggle('active', mediaType === 'video');
+            imageViewer.classList.toggle('active', mediaType === 'image');
+            videoPlayer.pause();
+            videoPlayer.src = mediaType === 'video' ? mediaSrc : '';
+            imageViewer.src = mediaType === 'image' ? mediaSrc : '';
+            imageViewer.alt = mediaType === 'image' ? mediaSrc : '';
             overlay.classList.add('active');
-            videoPlayer.play();
+            if (mediaType === 'video') {{
+                videoPlayer.play();
+            }}
         }}
 
         function updateVideoFrameSize() {{
-            if (!videoPlayer.videoWidth || !videoPlayer.videoHeight) {{
+            const mediaSize = getActiveMediaSize();
+            if (!mediaSize) {{
                 videoFrame.style.width = '';
                 videoFrame.style.height = '';
                 baseFrameWidth = 0;
@@ -394,21 +455,35 @@ class VideoGalleryGenerator:
             }}
 
             const rect = videoContainer.getBoundingClientRect();
-            const videoRatio = videoPlayer.videoWidth / videoPlayer.videoHeight;
+            const mediaRatio = mediaSize.width / mediaSize.height;
             const elementRatio = rect.width / rect.height;
             let frameWidth = rect.width;
             let frameHeight = rect.height;
 
-            if (videoRatio > elementRatio) {{
-                frameHeight = rect.width / videoRatio;
+            if (mediaRatio > elementRatio) {{
+                frameHeight = rect.width / mediaRatio;
             }} else {{
-                frameWidth = rect.height * videoRatio;
+                frameWidth = rect.height * mediaRatio;
             }}
 
             baseFrameWidth = frameWidth;
             baseFrameHeight = frameHeight;
             clampPan();
             applyZoomLayout();
+        }}
+
+        function getActiveMediaSize() {{
+            if (activeMediaType === 'video') {{
+                if (!videoPlayer.videoWidth || !videoPlayer.videoHeight) {{
+                    return null;
+                }}
+                return {{ width: videoPlayer.videoWidth, height: videoPlayer.videoHeight }};
+            }}
+
+            if (!imageViewer.naturalWidth || !imageViewer.naturalHeight) {{
+                return null;
+            }}
+            return {{ width: imageViewer.naturalWidth, height: imageViewer.naturalHeight }};
         }}
 
         function applyZoomLayout() {{
@@ -511,6 +586,12 @@ class VideoGalleryGenerator:
             overlay.classList.remove('active');
             videoPlayer.pause();
             videoPlayer.src = '';
+            imageViewer.src = '';
+            imageViewer.alt = '';
+            videoPlayer.classList.remove('active');
+            imageViewer.classList.remove('active');
+            videoControls.classList.remove('image-mode');
+            activeMediaType = 'video';
             resetLoopState();
             resetZoomState();
             resetPointerState();
@@ -569,6 +650,10 @@ class VideoGalleryGenerator:
         }});
 
         playToggle.addEventListener('click', () => {{
+            if (activeMediaType !== 'video') {{
+                return;
+            }}
+
             if (videoPlayer.paused) {{
                 videoPlayer.play();
             }} else {{
@@ -612,6 +697,15 @@ class VideoGalleryGenerator:
             updateVideoFrameSize();
         }});
 
+        imageViewer.addEventListener('load', () => {{
+            resetZoomState();
+            updateVideoFrameSize();
+        }});
+
+        imageViewer.addEventListener('dragstart', (e) => {{
+            e.preventDefault();
+        }});
+
         videoPlayer.addEventListener('timeupdate', () => {{
             if (loopEnd > loopStart && videoPlayer.currentTime >= loopEnd) {{
                 videoPlayer.currentTime = loopStart;
@@ -632,18 +726,19 @@ class VideoGalleryGenerator:
 </body>
 </html>'''
 
-    def _create_thumbnail_html(self, mp4_files: list[Path]) -> str:
+    def _create_thumbnail_html(self, media_items: list[MediaItem]) -> str:
         """Create thumbnail grid items"""
         thumbnail_items = []
-        for mp4_file in mp4_files:
-            thumb_name = mp4_file.stem + ".jpg"
+        for media_item in media_items:
+            thumb_name = self._thumbnail_name(media_item.path)
             thumb_path = html.escape(f"{self.THUMBS_DIR}/{thumb_name}", quote=True)
-            video_name = html.escape(mp4_file.name, quote=True)
+            media_name = html.escape(media_item.path.name, quote=True)
+            media_type = html.escape(media_item.media_type, quote=True)
 
             thumbnail_items.append(f'''
-        <div class="thumbnail" data-video="{video_name}">
-            <img src="{thumb_path}" alt="{video_name}">
-            <div class="filename">{video_name}</div>
+        <div class="thumbnail" data-type="{media_type}" data-src="{media_name}">
+            <img src="{thumb_path}" alt="{media_name}">
+            <div class="filename">{media_name}</div>
         </div>''')
 
         return '\n'.join(thumbnail_items)
@@ -662,7 +757,7 @@ def main():
         target_path = "."
 
     try:
-        generator = VideoGalleryGenerator(target_path)
+        generator = MediaGalleryGenerator(target_path)
         print(f"Scanning: {generator.root_path}")
         generator.scan_and_generate()
         print("Done!")
