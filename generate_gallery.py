@@ -667,9 +667,7 @@ class MediaGalleryGenerator:
             const duration = videoPlayer.duration || 0;
             const maxStart = Math.max(0, loopEnd - minLoopSpan);
             loopStart = clamp(Number(loopStartInput.value), 0, maxStart);
-            if (videoPlayer.currentTime < loopStart || videoPlayer.currentTime >= loopEnd) {{
-                videoPlayer.currentTime = loopStart;
-            }}
+            videoPlayer.currentTime = loopStart;
             updateLoopInputs(duration);
         }});
 
@@ -677,9 +675,7 @@ class MediaGalleryGenerator:
             const duration = videoPlayer.duration || 0;
             const minEnd = Math.min(duration, loopStart + minLoopSpan);
             loopEnd = clamp(Number(loopEndInput.value), minEnd, duration);
-            if (videoPlayer.currentTime >= loopEnd) {{
-                videoPlayer.currentTime = loopStart;
-            }}
+            videoPlayer.currentTime = clamp(loopEnd - 0.5, loopStart, duration);
             updateLoopInputs(duration);
         }});
 
