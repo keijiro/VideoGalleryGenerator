@@ -238,32 +238,63 @@ class VideoGalleryGenerator:
             position: relative;
             width: 90vw;
             height: 90vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }}
 
         .video-container video {{
-            width: 100%;
-            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
             object-fit: contain;
             display: block;
         }}
 
-        .close-button {{
+        .loop-controls {{
+            display: none;
             position: absolute;
-            top: -40px;
-            right: 0;
-            background: #fff;
-            border: none;
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            font-size: 24px;
-            cursor: pointer;
-            line-height: 1;
+            top: 60%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(560px, 82vw);
+            padding: 14px 16px;
+            background: rgba(0, 0, 0, 0.58);
+            color: white;
+            border-radius: 8px;
+            backdrop-filter: blur(8px);
+            gap: 10px;
         }}
 
-        .close-button:hover {{
-            background: #ddd;
+        .loop-controls.active {{
+            display: grid;
         }}
+
+        .loop-row {{
+            display: grid;
+            grid-template-columns: 44px 1fr 72px;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }}
+
+        .loop-row input {{
+            width: 100%;
+        }}
+
+        .play-toggle {{
+            justify-self: start;
+            padding: 7px 14px;
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.16);
+            color: white;
+            cursor: pointer;
+        }}
+
+        .play-toggle:hover {{
+            background: rgba(255, 255, 255, 0.26);
+        }}
+
     </style>
 </head>
 <body>
@@ -275,8 +306,20 @@ class VideoGalleryGenerator:
 
     <div class="video-overlay" id="videoOverlay">
         <div class="video-container">
-            <button class="close-button" onclick="closeVideo()">×</button>
             <video id="videoPlayer" loop muted autoplay></video>
+            <div class="loop-controls" id="loopControls">
+                <button class="play-toggle" id="playToggle" type="button">Pause</button>
+                <div class="loop-row">
+                    <span>A</span>
+                    <input id="loopStart" type="range" min="0" max="0" step="0.01" value="0">
+                    <span id="loopStartTime">00:00.00</span>
+                </div>
+                <div class="loop-row">
+                    <span>B</span>
+                    <input id="loopEnd" type="range" min="0" max="0" step="0.01" value="0">
+                    <span id="loopEndTime">00:00.00</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -284,17 +327,113 @@ class VideoGalleryGenerator:
         const overlay = document.getElementById('videoOverlay');
         const videoPlayer = document.getElementById('videoPlayer');
         const thumbnails = document.querySelectorAll('.thumbnail');
+        const loopControls = document.getElementById('loopControls');
+        const playToggle = document.getElementById('playToggle');
+        const loopStartInput = document.getElementById('loopStart');
+        const loopEndInput = document.getElementById('loopEnd');
+        const loopStartTime = document.getElementById('loopStartTime');
+        const loopEndTime = document.getElementById('loopEndTime');
+        const minLoopSpan = 0.01;
+        let loopStart = 0;
+        let loopEnd = 0;
 
         thumbnails.forEach(thumb => {{
             thumb.addEventListener('click', () => {{
                 const videoFile = thumb.dataset.video;
+                resetLoopState();
                 videoPlayer.src = videoFile;
                 overlay.classList.add('active');
                 videoPlayer.play();
             }});
         }});
 
-        videoPlayer.addEventListener('click', () => {{
+        function isInsideVideoContent(e) {{
+            const rect = videoPlayer.getBoundingClientRect();
+            if (!videoPlayer.videoWidth || !videoPlayer.videoHeight) {{
+                return true;
+            }}
+
+            const videoRatio = videoPlayer.videoWidth / videoPlayer.videoHeight;
+            const elementRatio = rect.width / rect.height;
+            let contentWidth = rect.width;
+            let contentHeight = rect.height;
+
+            if (videoRatio > elementRatio) {{
+                contentHeight = rect.width / videoRatio;
+            }} else {{
+                contentWidth = rect.height * videoRatio;
+            }}
+
+            const contentLeft = rect.left + (rect.width - contentWidth) / 2;
+            const contentTop = rect.top + (rect.height - contentHeight) / 2;
+            const x = e.clientX;
+            const y = e.clientY;
+
+            return x >= contentLeft &&
+                   x <= contentLeft + contentWidth &&
+                   y >= contentTop &&
+                   y <= contentTop + contentHeight;
+        }}
+
+        videoPlayer.addEventListener('click', (e) => {{
+            if (!isInsideVideoContent(e)) {{
+                closeVideo();
+                return;
+            }}
+
+            loopControls.classList.toggle('active');
+        }});
+
+        function closeVideo() {{
+            overlay.classList.remove('active');
+            videoPlayer.pause();
+            videoPlayer.src = '';
+            resetLoopState();
+        }}
+
+        function resetLoopState() {{
+            loopStart = 0;
+            loopEnd = 0;
+            loopControls.classList.remove('active');
+            updateLoopInputs(0);
+            updatePlayToggle();
+        }}
+
+        function updateLoopInputs(duration) {{
+            loopStartInput.max = duration;
+            loopEndInput.max = duration;
+            loopStartInput.value = loopStart;
+            loopEndInput.value = loopEnd;
+            loopStartTime.textContent = formatTime(loopStart);
+            loopEndTime.textContent = formatTime(loopEnd);
+        }}
+
+        function formatTime(seconds) {{
+            const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+            const minutes = Math.floor(safeSeconds / 60);
+            const remaining = safeSeconds - minutes * 60;
+            return `${{String(minutes).padStart(2, '0')}}:${{remaining.toFixed(2).padStart(5, '0')}}`;
+        }}
+
+        function clamp(value, min, max) {{
+            return Math.min(Math.max(value, min), max);
+        }}
+
+        function updatePlayToggle() {{
+            playToggle.textContent = videoPlayer.paused ? 'Play' : 'Pause';
+        }}
+
+        overlay.addEventListener('click', (e) => {{
+            if (e.target !== videoPlayer) {{
+                closeVideo();
+            }}
+        }});
+
+        loopControls.addEventListener('click', (e) => {{
+            e.stopPropagation();
+        }});
+
+        playToggle.addEventListener('click', () => {{
             if (videoPlayer.paused) {{
                 videoPlayer.play();
             }} else {{
@@ -302,17 +441,41 @@ class VideoGalleryGenerator:
             }}
         }});
 
-        function closeVideo() {{
-            overlay.classList.remove('active');
-            videoPlayer.pause();
-            videoPlayer.src = '';
-        }}
+        loopStartInput.addEventListener('input', () => {{
+            const duration = videoPlayer.duration || 0;
+            const maxStart = Math.max(0, loopEnd - minLoopSpan);
+            loopStart = clamp(Number(loopStartInput.value), 0, maxStart);
+            if (videoPlayer.currentTime < loopStart || videoPlayer.currentTime >= loopEnd) {{
+                videoPlayer.currentTime = loopStart;
+            }}
+            updateLoopInputs(duration);
+        }});
 
-        overlay.addEventListener('click', (e) => {{
-            if (e.target === overlay) {{
-                closeVideo();
+        loopEndInput.addEventListener('input', () => {{
+            const duration = videoPlayer.duration || 0;
+            const minEnd = Math.min(duration, loopStart + minLoopSpan);
+            loopEnd = clamp(Number(loopEndInput.value), minEnd, duration);
+            if (videoPlayer.currentTime >= loopEnd) {{
+                videoPlayer.currentTime = loopStart;
+            }}
+            updateLoopInputs(duration);
+        }});
+
+        videoPlayer.addEventListener('loadedmetadata', () => {{
+            loopStart = 0;
+            loopEnd = videoPlayer.duration || 0;
+            updateLoopInputs(loopEnd);
+        }});
+
+        videoPlayer.addEventListener('timeupdate', () => {{
+            if (loopEnd > loopStart && videoPlayer.currentTime >= loopEnd) {{
+                videoPlayer.currentTime = loopStart;
+                videoPlayer.play();
             }}
         }});
+
+        videoPlayer.addEventListener('play', updatePlayToggle);
+        videoPlayer.addEventListener('pause', updatePlayToggle);
 
         document.addEventListener('keydown', (e) => {{
             if (e.key === 'Escape') {{
