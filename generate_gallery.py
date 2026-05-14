@@ -4,12 +4,11 @@ Video Gallery Generator
 Scans directories for mp4 files and generates static HTML galleries
 """
 
-import os
+import html
 import re
 import sys
 import subprocess
 from pathlib import Path
-from typing import List
 
 
 class VideoGalleryGenerator:
@@ -46,7 +45,7 @@ class VideoGalleryGenerator:
             if item.is_dir() and item.name != self.THUMBS_DIR:
                 yield from self._walk_directories(item)
 
-    def _find_mp4_files(self, directory: Path) -> List[Path]:
+    def _find_mp4_files(self, directory: Path) -> list[Path]:
         """Find all mp4 files in the given directory (non-recursive)"""
         mp4_files = []
         for item in directory.iterdir():
@@ -54,7 +53,7 @@ class VideoGalleryGenerator:
                 mp4_files.append(item)
         return sorted(mp4_files, key=lambda x: self._natural_sort_key(x.name))
 
-    def _process_directory(self, directory: Path, mp4_files: List[Path]):
+    def _process_directory(self, directory: Path, mp4_files: list[Path]):
         """Process a directory: generate thumbnails and HTML"""
         # Create Thumbs directory if needed
         thumbs_dir = directory / self.THUMBS_DIR
@@ -106,7 +105,7 @@ class VideoGalleryGenerator:
             if temp_thumb.exists():
                 temp_thumb.unlink()
 
-    def _generate_html(self, directory: Path, mp4_files: List[Path]):
+    def _generate_html(self, directory: Path, mp4_files: list[Path]):
         """Generate index.html for the directory"""
         html_path = directory / "index.html"
 
@@ -130,33 +129,18 @@ class VideoGalleryGenerator:
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
-    def _create_html_content(self, directory: Path, mp4_files: List[Path], is_root: bool) -> str:
+    def _create_html_content(self, directory: Path, mp4_files: list[Path], is_root: bool) -> str:
         """Create HTML content for the gallery"""
 
-        # Create thumbnail items
-        thumbnail_items = []
-        for mp4_file in mp4_files:
-            thumb_name = mp4_file.stem + ".jpg"
-            thumb_path = f"{self.THUMBS_DIR}/{thumb_name}"
-            video_name = mp4_file.name
-
-            thumbnail_items.append(f'''
-        <div class="thumbnail" data-video="{video_name}">
-            <img src="{thumb_path}" alt="{video_name}">
-            <div class="filename">{video_name}</div>
-        </div>''')
-
-        thumbnails_html = '\n'.join(thumbnail_items)
-
-        # Up link (show only if not root)
-        up_link = '' if is_root else '<a href=".." class="up-link">↑ Up</a>'
+        thumbnails_html = self._create_thumbnail_html(mp4_files)
+        up_link = self._create_up_link(is_root)
 
         return f'''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Gallery - {directory.name}</title>
+    <title>Video Gallery - {html.escape(directory.name)}</title>
     <style>
         * {{
             margin: 0;
@@ -259,7 +243,7 @@ class VideoGalleryGenerator:
             user-select: none;
         }}
 
-        .loop-controls {{
+        .video-controls {{
             display: none;
             position: absolute;
             top: 60%;
@@ -274,7 +258,7 @@ class VideoGalleryGenerator:
             gap: 10px;
         }}
 
-        .loop-controls.active {{
+        .video-controls.active {{
             display: grid;
         }}
 
@@ -285,7 +269,7 @@ class VideoGalleryGenerator:
             gap: 10px;
         }}
 
-        .loop-row {{
+        .control-row {{
             display: grid;
             grid-template-columns: 44px 1fr 72px;
             align-items: center;
@@ -293,7 +277,7 @@ class VideoGalleryGenerator:
             font-size: 13px;
         }}
 
-        .loop-row input {{
+        .control-row input {{
             width: 100%;
         }}
 
@@ -324,26 +308,26 @@ class VideoGalleryGenerator:
     </div>
 
     <div class="video-overlay" id="videoOverlay">
-        <div class="video-container">
+        <div class="video-container" id="videoContainer">
             <div class="video-frame" id="videoFrame">
                 <video id="videoPlayer" loop muted autoplay></video>
             </div>
-            <div class="loop-controls" id="loopControls">
+            <div class="video-controls" id="videoControls">
                 <div class="controls-header">
                     <button class="control-button" id="playToggle" type="button">Pause</button>
                     <button class="control-button" id="closeVideoButton" type="button">Close</button>
                 </div>
-                <div class="loop-row">
+                <div class="control-row">
                     <span>A</span>
                     <input id="loopStart" type="range" min="0" max="0" step="0.01" value="0">
                     <span id="loopStartTime">00:00.00</span>
                 </div>
-                <div class="loop-row">
+                <div class="control-row">
                     <span>B</span>
                     <input id="loopEnd" type="range" min="0" max="0" step="0.01" value="0">
                     <span id="loopEndTime">00:00.00</span>
                 </div>
-                <div class="loop-row">
+                <div class="control-row">
                     <span>Zoom</span>
                     <input id="zoomSlider" type="range" min="1" max="8" step="0.1" value="1">
                     <span class="zoom-value" id="zoomValue">1.0x</span>
@@ -354,11 +338,11 @@ class VideoGalleryGenerator:
 
     <script>
         const overlay = document.getElementById('videoOverlay');
-        const videoContainer = document.querySelector('.video-container');
+        const videoContainer = document.getElementById('videoContainer');
         const videoFrame = document.getElementById('videoFrame');
         const videoPlayer = document.getElementById('videoPlayer');
         const thumbnails = document.querySelectorAll('.thumbnail');
-        const loopControls = document.getElementById('loopControls');
+        const videoControls = document.getElementById('videoControls');
         const playToggle = document.getElementById('playToggle');
         const closeVideoButton = document.getElementById('closeVideoButton');
         const loopStartInput = document.getElementById('loopStart');
@@ -387,13 +371,18 @@ class VideoGalleryGenerator:
 
         thumbnails.forEach(thumb => {{
             thumb.addEventListener('click', () => {{
-                const videoFile = thumb.dataset.video;
-                resetLoopState();
-                videoPlayer.src = videoFile;
-                overlay.classList.add('active');
-                videoPlayer.play();
+                openVideo(thumb.dataset.video);
             }});
         }});
+
+        function openVideo(videoFile) {{
+            resetLoopState();
+            resetZoomState();
+            resetPointerState();
+            videoPlayer.src = videoFile;
+            overlay.classList.add('active');
+            videoPlayer.play();
+        }}
 
         function updateVideoFrameSize() {{
             if (!videoPlayer.videoWidth || !videoPlayer.videoHeight) {{
@@ -437,6 +426,19 @@ class VideoGalleryGenerator:
             panX = 0;
             panY = 0;
             applyZoomLayout();
+        }}
+
+        function resetPointerState() {{
+            if (pointerDown && pointerId !== null) {{
+                try {{
+                    videoFrame.releasePointerCapture(pointerId);
+                }} catch (e) {{
+                }}
+            }}
+
+            pointerDown = false;
+            pointerId = null;
+            pointerMoved = false;
         }}
 
         function clampPan() {{
@@ -491,17 +493,14 @@ class VideoGalleryGenerator:
             const distance = Math.hypot(dx, dy);
 
             if (distance < clickMoveTolerance) {{
-                loopControls.classList.toggle('active');
+                videoControls.classList.toggle('active');
             }}
 
-            pointerDown = false;
-            videoFrame.releasePointerCapture(pointerId);
-            pointerId = null;
+            resetPointerState();
         }});
 
         videoFrame.addEventListener('pointercancel', () => {{
-            pointerDown = false;
-            pointerId = null;
+            resetPointerState();
         }});
 
         videoFrame.addEventListener('click', (e) => {{
@@ -514,12 +513,13 @@ class VideoGalleryGenerator:
             videoPlayer.src = '';
             resetLoopState();
             resetZoomState();
+            resetPointerState();
         }}
 
         function resetLoopState() {{
             loopStart = 0;
             loopEnd = 0;
-            loopControls.classList.remove('active');
+            videoControls.classList.remove('active');
             updateLoopInputs(0);
             updatePlayToggle();
         }}
@@ -559,11 +559,11 @@ class VideoGalleryGenerator:
             }}
         }});
 
-        loopControls.addEventListener('pointerdown', () => {{
+        videoControls.addEventListener('pointerdown', () => {{
             pointerStartedInControls = true;
         }});
 
-        loopControls.addEventListener('click', (e) => {{
+        videoControls.addEventListener('click', (e) => {{
             e.stopPropagation();
             pointerStartedInControls = false;
         }});
@@ -631,6 +631,27 @@ class VideoGalleryGenerator:
     </script>
 </body>
 </html>'''
+
+    def _create_thumbnail_html(self, mp4_files: list[Path]) -> str:
+        """Create thumbnail grid items"""
+        thumbnail_items = []
+        for mp4_file in mp4_files:
+            thumb_name = mp4_file.stem + ".jpg"
+            thumb_path = html.escape(f"{self.THUMBS_DIR}/{thumb_name}", quote=True)
+            video_name = html.escape(mp4_file.name, quote=True)
+
+            thumbnail_items.append(f'''
+        <div class="thumbnail" data-video="{video_name}">
+            <img src="{thumb_path}" alt="{video_name}">
+            <div class="filename">{video_name}</div>
+        </div>''')
+
+        return '\n'.join(thumbnail_items)
+
+    @staticmethod
+    def _create_up_link(is_root: bool) -> str:
+        """Create the parent directory link"""
+        return '' if is_root else '<a href=".." class="up-link">↑ Up</a>'
 
 
 def main():
