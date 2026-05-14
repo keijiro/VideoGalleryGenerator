@@ -246,10 +246,9 @@ class VideoGalleryGenerator:
         .video-frame {{
             position: relative;
             overflow: hidden;
-            max-width: 100%;
-            max-height: 100%;
             cursor: pointer;
             touch-action: none;
+            flex: none;
         }}
 
         .video-frame video {{
@@ -257,8 +256,6 @@ class VideoGalleryGenerator:
             height: 100%;
             object-fit: contain;
             display: block;
-            transform-origin: center center;
-            will-change: transform;
             user-select: none;
         }}
 
@@ -281,6 +278,13 @@ class VideoGalleryGenerator:
             display: grid;
         }}
 
+        .controls-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }}
+
         .loop-row {{
             display: grid;
             grid-template-columns: 44px 1fr 72px;
@@ -293,8 +297,7 @@ class VideoGalleryGenerator:
             width: 100%;
         }}
 
-        .play-toggle {{
-            justify-self: start;
+        .control-button {{
             padding: 7px 14px;
             border: 1px solid rgba(255, 255, 255, 0.35);
             border-radius: 4px;
@@ -303,7 +306,7 @@ class VideoGalleryGenerator:
             cursor: pointer;
         }}
 
-        .play-toggle:hover {{
+        .control-button:hover {{
             background: rgba(255, 255, 255, 0.26);
         }}
 
@@ -326,7 +329,10 @@ class VideoGalleryGenerator:
                 <video id="videoPlayer" loop muted autoplay></video>
             </div>
             <div class="loop-controls" id="loopControls">
-                <button class="play-toggle" id="playToggle" type="button">Pause</button>
+                <div class="controls-header">
+                    <button class="control-button" id="playToggle" type="button">Pause</button>
+                    <button class="control-button" id="closeVideoButton" type="button">Close</button>
+                </div>
                 <div class="loop-row">
                     <span>A</span>
                     <input id="loopStart" type="range" min="0" max="0" step="0.01" value="0">
@@ -354,6 +360,7 @@ class VideoGalleryGenerator:
         const thumbnails = document.querySelectorAll('.thumbnail');
         const loopControls = document.getElementById('loopControls');
         const playToggle = document.getElementById('playToggle');
+        const closeVideoButton = document.getElementById('closeVideoButton');
         const loopStartInput = document.getElementById('loopStart');
         const loopEndInput = document.getElementById('loopEnd');
         const loopStartTime = document.getElementById('loopStartTime');
@@ -367,6 +374,8 @@ class VideoGalleryGenerator:
         let zoom = 1;
         let panX = 0;
         let panY = 0;
+        let baseFrameWidth = 0;
+        let baseFrameHeight = 0;
         let pointerDown = false;
         let pointerId = null;
         let pointerStartX = 0;
@@ -390,6 +399,8 @@ class VideoGalleryGenerator:
             if (!videoPlayer.videoWidth || !videoPlayer.videoHeight) {{
                 videoFrame.style.width = '';
                 videoFrame.style.height = '';
+                baseFrameWidth = 0;
+                baseFrameHeight = 0;
                 return;
             }}
 
@@ -405,14 +416,18 @@ class VideoGalleryGenerator:
                 frameWidth = rect.height * videoRatio;
             }}
 
-            videoFrame.style.width = `${{frameWidth}}px`;
-            videoFrame.style.height = `${{frameHeight}}px`;
+            baseFrameWidth = frameWidth;
+            baseFrameHeight = frameHeight;
             clampPan();
-            applyVideoTransform();
+            applyZoomLayout();
         }}
 
-        function applyVideoTransform() {{
-            videoPlayer.style.transform = `translate(${{panX}}px, ${{panY}}px) scale(${{zoom}})`;
+        function applyZoomLayout() {{
+            const frameWidth = baseFrameWidth * zoom;
+            const frameHeight = baseFrameHeight * zoom;
+            videoFrame.style.width = `${{frameWidth}}px`;
+            videoFrame.style.height = `${{frameHeight}}px`;
+            videoFrame.style.transform = `translate(${{panX}}px, ${{panY}}px)`;
             zoomSlider.value = zoom;
             zoomValue.textContent = `${{zoom.toFixed(1)}}x`;
         }}
@@ -421,19 +436,18 @@ class VideoGalleryGenerator:
             zoom = 1;
             panX = 0;
             panY = 0;
-            applyVideoTransform();
+            applyZoomLayout();
         }}
 
         function clampPan() {{
-            if (zoom <= 1) {{
+            if (zoom <= 1 || !baseFrameWidth || !baseFrameHeight) {{
                 panX = 0;
                 panY = 0;
                 return;
             }}
 
-            const rect = videoFrame.getBoundingClientRect();
-            const maxPanX = rect.width * (zoom - 1) / 2;
-            const maxPanY = rect.height * (zoom - 1) / 2;
+            const maxPanX = baseFrameWidth * (zoom - 1) / 2;
+            const maxPanY = baseFrameHeight * (zoom - 1) / 2;
             panX = clamp(panX, -maxPanX, maxPanX);
             panY = clamp(panY, -maxPanY, maxPanY);
         }}
@@ -463,7 +477,7 @@ class VideoGalleryGenerator:
                 panX = startPanX + dx;
                 panY = startPanY + dy;
                 clampPan();
-                applyVideoTransform();
+                applyZoomLayout();
             }}
         }});
 
@@ -562,6 +576,8 @@ class VideoGalleryGenerator:
             }}
         }});
 
+        closeVideoButton.addEventListener('click', closeVideo);
+
         loopStartInput.addEventListener('input', () => {{
             const duration = videoPlayer.duration || 0;
             const maxStart = Math.max(0, loopEnd - minLoopSpan);
@@ -585,7 +601,7 @@ class VideoGalleryGenerator:
         zoomSlider.addEventListener('input', () => {{
             zoom = Number(zoomSlider.value);
             clampPan();
-            applyVideoTransform();
+            applyZoomLayout();
         }});
 
         videoPlayer.addEventListener('loadedmetadata', () => {{
