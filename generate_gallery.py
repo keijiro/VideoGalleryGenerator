@@ -243,11 +243,23 @@ class VideoGalleryGenerator:
             align-items: center;
         }}
 
-        .video-container video {{
+        .video-frame {{
+            position: relative;
+            overflow: hidden;
             max-width: 100%;
             max-height: 100%;
+            cursor: pointer;
+            touch-action: none;
+        }}
+
+        .video-frame video {{
+            width: 100%;
+            height: 100%;
             object-fit: contain;
             display: block;
+            transform-origin: center center;
+            will-change: transform;
+            user-select: none;
         }}
 
         .loop-controls {{
@@ -295,6 +307,10 @@ class VideoGalleryGenerator:
             background: rgba(255, 255, 255, 0.26);
         }}
 
+        .zoom-value {{
+            text-align: right;
+        }}
+
     </style>
 </head>
 <body>
@@ -306,7 +322,9 @@ class VideoGalleryGenerator:
 
     <div class="video-overlay" id="videoOverlay">
         <div class="video-container">
-            <video id="videoPlayer" loop muted autoplay></video>
+            <div class="video-frame" id="videoFrame">
+                <video id="videoPlayer" loop muted autoplay></video>
+            </div>
             <div class="loop-controls" id="loopControls">
                 <button class="play-toggle" id="playToggle" type="button">Pause</button>
                 <div class="loop-row">
@@ -319,12 +337,19 @@ class VideoGalleryGenerator:
                     <input id="loopEnd" type="range" min="0" max="0" step="0.01" value="0">
                     <span id="loopEndTime">00:00.00</span>
                 </div>
+                <div class="loop-row">
+                    <span>Zoom</span>
+                    <input id="zoomSlider" type="range" min="1" max="8" step="0.1" value="1">
+                    <span class="zoom-value" id="zoomValue">1.0x</span>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
         const overlay = document.getElementById('videoOverlay');
+        const videoContainer = document.querySelector('.video-container');
+        const videoFrame = document.getElementById('videoFrame');
         const videoPlayer = document.getElementById('videoPlayer');
         const thumbnails = document.querySelectorAll('.thumbnail');
         const loopControls = document.getElementById('loopControls');
@@ -333,9 +358,23 @@ class VideoGalleryGenerator:
         const loopEndInput = document.getElementById('loopEnd');
         const loopStartTime = document.getElementById('loopStartTime');
         const loopEndTime = document.getElementById('loopEndTime');
+        const zoomSlider = document.getElementById('zoomSlider');
+        const zoomValue = document.getElementById('zoomValue');
         const minLoopSpan = 0.01;
+        const clickMoveTolerance = 12;
         let loopStart = 0;
         let loopEnd = 0;
+        let zoom = 1;
+        let panX = 0;
+        let panY = 0;
+        let pointerDown = false;
+        let pointerId = null;
+        let pointerStartX = 0;
+        let pointerStartY = 0;
+        let startPanX = 0;
+        let startPanY = 0;
+        let pointerMoved = false;
+        let pointerStartedInControls = false;
 
         thumbnails.forEach(thumb => {{
             thumb.addEventListener('click', () => {{
@@ -347,41 +386,112 @@ class VideoGalleryGenerator:
             }});
         }});
 
-        function isInsideVideoContent(e) {{
-            const rect = videoPlayer.getBoundingClientRect();
+        function updateVideoFrameSize() {{
             if (!videoPlayer.videoWidth || !videoPlayer.videoHeight) {{
-                return true;
-            }}
-
-            const videoRatio = videoPlayer.videoWidth / videoPlayer.videoHeight;
-            const elementRatio = rect.width / rect.height;
-            let contentWidth = rect.width;
-            let contentHeight = rect.height;
-
-            if (videoRatio > elementRatio) {{
-                contentHeight = rect.width / videoRatio;
-            }} else {{
-                contentWidth = rect.height * videoRatio;
-            }}
-
-            const contentLeft = rect.left + (rect.width - contentWidth) / 2;
-            const contentTop = rect.top + (rect.height - contentHeight) / 2;
-            const x = e.clientX;
-            const y = e.clientY;
-
-            return x >= contentLeft &&
-                   x <= contentLeft + contentWidth &&
-                   y >= contentTop &&
-                   y <= contentTop + contentHeight;
-        }}
-
-        videoPlayer.addEventListener('click', (e) => {{
-            if (!isInsideVideoContent(e)) {{
-                closeVideo();
+                videoFrame.style.width = '';
+                videoFrame.style.height = '';
                 return;
             }}
 
-            loopControls.classList.toggle('active');
+            const rect = videoContainer.getBoundingClientRect();
+            const videoRatio = videoPlayer.videoWidth / videoPlayer.videoHeight;
+            const elementRatio = rect.width / rect.height;
+            let frameWidth = rect.width;
+            let frameHeight = rect.height;
+
+            if (videoRatio > elementRatio) {{
+                frameHeight = rect.width / videoRatio;
+            }} else {{
+                frameWidth = rect.height * videoRatio;
+            }}
+
+            videoFrame.style.width = `${{frameWidth}}px`;
+            videoFrame.style.height = `${{frameHeight}}px`;
+            clampPan();
+            applyVideoTransform();
+        }}
+
+        function applyVideoTransform() {{
+            videoPlayer.style.transform = `translate(${{panX}}px, ${{panY}}px) scale(${{zoom}})`;
+            zoomSlider.value = zoom;
+            zoomValue.textContent = `${{zoom.toFixed(1)}}x`;
+        }}
+
+        function resetZoomState() {{
+            zoom = 1;
+            panX = 0;
+            panY = 0;
+            applyVideoTransform();
+        }}
+
+        function clampPan() {{
+            if (zoom <= 1) {{
+                panX = 0;
+                panY = 0;
+                return;
+            }}
+
+            const rect = videoFrame.getBoundingClientRect();
+            const maxPanX = rect.width * (zoom - 1) / 2;
+            const maxPanY = rect.height * (zoom - 1) / 2;
+            panX = clamp(panX, -maxPanX, maxPanX);
+            panY = clamp(panY, -maxPanY, maxPanY);
+        }}
+
+        videoFrame.addEventListener('pointerdown', (e) => {{
+            pointerDown = true;
+            pointerId = e.pointerId;
+            pointerStartX = e.clientX;
+            pointerStartY = e.clientY;
+            startPanX = panX;
+            startPanY = panY;
+            pointerMoved = false;
+            videoFrame.setPointerCapture(pointerId);
+        }});
+
+        videoFrame.addEventListener('pointermove', (e) => {{
+            if (!pointerDown || e.pointerId !== pointerId) {{
+                return;
+            }}
+
+            const dx = e.clientX - pointerStartX;
+            const dy = e.clientY - pointerStartY;
+            const distance = Math.hypot(dx, dy);
+            pointerMoved = pointerMoved || distance >= clickMoveTolerance;
+
+            if (zoom > 1 && pointerMoved) {{
+                panX = startPanX + dx;
+                panY = startPanY + dy;
+                clampPan();
+                applyVideoTransform();
+            }}
+        }});
+
+        videoFrame.addEventListener('pointerup', (e) => {{
+            if (!pointerDown || e.pointerId !== pointerId) {{
+                return;
+            }}
+
+            const dx = e.clientX - pointerStartX;
+            const dy = e.clientY - pointerStartY;
+            const distance = Math.hypot(dx, dy);
+
+            if (distance < clickMoveTolerance) {{
+                loopControls.classList.toggle('active');
+            }}
+
+            pointerDown = false;
+            videoFrame.releasePointerCapture(pointerId);
+            pointerId = null;
+        }});
+
+        videoFrame.addEventListener('pointercancel', () => {{
+            pointerDown = false;
+            pointerId = null;
+        }});
+
+        videoFrame.addEventListener('click', (e) => {{
+            e.stopPropagation();
         }});
 
         function closeVideo() {{
@@ -389,6 +499,7 @@ class VideoGalleryGenerator:
             videoPlayer.pause();
             videoPlayer.src = '';
             resetLoopState();
+            resetZoomState();
         }}
 
         function resetLoopState() {{
@@ -424,13 +535,23 @@ class VideoGalleryGenerator:
         }}
 
         overlay.addEventListener('click', (e) => {{
-            if (e.target !== videoPlayer) {{
+            if (pointerStartedInControls) {{
+                pointerStartedInControls = false;
+                return;
+            }}
+
+            if (e.target === overlay || e.target === videoContainer) {{
                 closeVideo();
             }}
         }});
 
+        loopControls.addEventListener('pointerdown', () => {{
+            pointerStartedInControls = true;
+        }});
+
         loopControls.addEventListener('click', (e) => {{
             e.stopPropagation();
+            pointerStartedInControls = false;
         }});
 
         playToggle.addEventListener('click', () => {{
@@ -461,10 +582,18 @@ class VideoGalleryGenerator:
             updateLoopInputs(duration);
         }});
 
+        zoomSlider.addEventListener('input', () => {{
+            zoom = Number(zoomSlider.value);
+            clampPan();
+            applyVideoTransform();
+        }});
+
         videoPlayer.addEventListener('loadedmetadata', () => {{
             loopStart = 0;
             loopEnd = videoPlayer.duration || 0;
             updateLoopInputs(loopEnd);
+            resetZoomState();
+            updateVideoFrameSize();
         }});
 
         videoPlayer.addEventListener('timeupdate', () => {{
@@ -476,6 +605,7 @@ class VideoGalleryGenerator:
 
         videoPlayer.addEventListener('play', updatePlayToggle);
         videoPlayer.addEventListener('pause', updatePlayToggle);
+        window.addEventListener('resize', updateVideoFrameSize);
 
         document.addEventListener('keydown', (e) => {{
             if (e.key === 'Escape') {{
