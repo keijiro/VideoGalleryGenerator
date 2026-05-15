@@ -98,12 +98,16 @@ class MediaGalleryGenerator:
             self._generate_image_thumbnail(media_item.path, thumb_path)
 
     def _generate_video_thumbnail(self, video_path: Path, thumb_path: Path, thumbs_dir: Path):
-        """Generate thumbnail from first frame of video"""
+        """Generate thumbnail from the middle frame of video"""
         temp_thumb = thumbs_dir / f"temp_{thumb_path.name}"
         try:
-            # Extract first frame
+            seek_time = self._get_video_duration(video_path) / 2
+
+            # Extract a middle frame using fast input seeking.
             subprocess.run([
-                'ffmpeg', '-y', '-i', str(video_path),
+                'ffmpeg', '-y',
+                '-ss', str(seek_time),
+                '-i', str(video_path),
                 '-vframes', '1',
                 '-f', 'image2',
                 str(temp_thumb)
@@ -124,6 +128,20 @@ class MediaGalleryGenerator:
             print(f"  Error generating thumbnail: {e}")
             if temp_thumb.exists():
                 temp_thumb.unlink()
+
+    @staticmethod
+    def _get_video_duration(video_path: Path) -> float:
+        try:
+            result = subprocess.run([
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(video_path)
+            ], check=True, capture_output=True, text=True)
+            return float(result.stdout.strip())
+        except (subprocess.CalledProcessError, ValueError):
+            return 0
 
     def _generate_image_thumbnail(self, image_path: Path, thumb_path: Path):
         """Generate thumbnail from an image file"""
@@ -364,6 +382,7 @@ class MediaGalleryGenerator:
             <div class="video-controls" id="videoControls">
                 <div class="controls-header">
                     <button class="control-button video-only" id="playToggle" type="button">Pause</button>
+                    <button class="control-button video-only" id="muteToggle" type="button">Unmute</button>
                     <button class="control-button" id="closeVideoButton" type="button">Close</button>
                 </div>
                 <div class="control-row video-only">
@@ -394,6 +413,7 @@ class MediaGalleryGenerator:
         const thumbnails = document.querySelectorAll('.thumbnail');
         const videoControls = document.getElementById('videoControls');
         const playToggle = document.getElementById('playToggle');
+        const muteToggle = document.getElementById('muteToggle');
         const closeVideoButton = document.getElementById('closeVideoButton');
         const loopStartInput = document.getElementById('loopStart');
         const loopEndInput = document.getElementById('loopEnd');
@@ -435,10 +455,12 @@ class MediaGalleryGenerator:
             videoPlayer.classList.toggle('active', mediaType === 'video');
             imageViewer.classList.toggle('active', mediaType === 'image');
             videoPlayer.pause();
+            videoPlayer.muted = true;
             videoPlayer.src = mediaType === 'video' ? mediaSrc : '';
             imageViewer.src = mediaType === 'image' ? mediaSrc : '';
             imageViewer.alt = mediaType === 'image' ? mediaSrc : '';
             overlay.classList.add('active');
+            updateMuteToggle();
             if (mediaType === 'video') {{
                 videoPlayer.play();
             }}
@@ -629,6 +651,10 @@ class MediaGalleryGenerator:
             playToggle.textContent = videoPlayer.paused ? 'Play' : 'Pause';
         }}
 
+        function updateMuteToggle() {{
+            muteToggle.textContent = videoPlayer.muted ? 'Unmute' : 'Mute';
+        }}
+
         overlay.addEventListener('click', (e) => {{
             if (pointerStartedInControls) {{
                 pointerStartedInControls = false;
@@ -659,6 +685,15 @@ class MediaGalleryGenerator:
             }} else {{
                 videoPlayer.pause();
             }}
+        }});
+
+        muteToggle.addEventListener('click', () => {{
+            if (activeMediaType !== 'video') {{
+                return;
+            }}
+
+            videoPlayer.muted = !videoPlayer.muted;
+            updateMuteToggle();
         }});
 
         closeVideoButton.addEventListener('click', closeVideo);
@@ -711,6 +746,7 @@ class MediaGalleryGenerator:
 
         videoPlayer.addEventListener('play', updatePlayToggle);
         videoPlayer.addEventListener('pause', updatePlayToggle);
+        videoPlayer.addEventListener('volumechange', updateMuteToggle);
         window.addEventListener('resize', updateVideoFrameSize);
 
         document.addEventListener('keydown', (e) => {{
