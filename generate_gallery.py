@@ -22,9 +22,9 @@ class MediaGalleryGenerator:
     """Generate HTML galleries for media files"""
 
     THUMBS_DIR = "Thumbs"
-    VIDEO_EXTENSION = ".mp4"
+    VIDEO_EXTENSIONS = {".mp4", ".mov"}
     IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-    MEDIA_EXTENSIONS = {VIDEO_EXTENSION} | IMAGE_EXTENSIONS
+    MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
     THUMB_SIZE = 200
 
     @staticmethod
@@ -62,7 +62,7 @@ class MediaGalleryGenerator:
             if not item.is_file() or suffix not in self.MEDIA_EXTENSIONS:
                 continue
 
-            media_type = "video" if suffix == self.VIDEO_EXTENSION else "image"
+            media_type = "video" if suffix in self.VIDEO_EXTENSIONS else "image"
             media_items.append(MediaItem(item, media_type))
 
         return sorted(media_items, key=lambda x: self._natural_sort_key(x.path.name))
